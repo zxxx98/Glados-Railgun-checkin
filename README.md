@@ -44,9 +44,17 @@
 
 > 不配置时默认不进行自动兑换；如需兑换，设置 `GLADOS_EXCHANGE_PLAN` 为 `plan100` / `plan200` / `plan500`。
 
-4. 手机推送（非必须）
+4. 推送通知（非必须，可同时使用 PushDeer 与飞书）
 
-- 添加1个`repository secret`，命名为`PUSHDEER_SENDKEY`，其值对应 PushDeer key: ([获取地址](https://www.pushdeer.com/product.html))。
+- **PushDeer**：添加1个`repository secret`，命名为`PUSHDEER_SENDKEY`，其值对应 PushDeer key: ([获取地址](https://www.pushdeer.com/product.html))。
+
+- **飞书**：添加 `FEISHU_WEBHOOK`（必填，若使用飞书通知），值为自定义机器人的 Webhook 地址。
+
+  > 获取方式：飞书群 -> 群设置 -> 群机器人 -> 添加机器人 -> 自定义机器人 -> 复制 Webhook 地址，形如 `https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx`
+
+- 如果开启了「签名校验」，还需添加 `FEISHU_SECRET`（选填），值为自定义机器人配置页面中的「签名密钥」。
+
+> `PUSHDEER_SENDKEY` 与 `FEISHU_WEBHOOK` 可同时配置，脚本会向两个渠道分别推送；都不配置则跳过推送。
 
 ### **star**自己的仓库
 
@@ -68,6 +76,7 @@
 - **2026-04**: 优化代码逻辑，优化日志输出，支持[新版域名](https://railgun.info) ，在 GLADOS_COOKIES 中添加新版域名下的 cookies 即可使用。
 - **2026-09**: 新增设备平台自适应重试（code 4 无需手动配置 UA 即可自动恢复）；默认关闭自动兑换，需显式配置 `GLADOS_EXCHANGE_PLAN` 才启用。
 - **2026-09**: 新增网络层重试/退避：`requests.Session` 挂载 `HTTPAdapter` + `urllib3.Retry`（total=3、指数退避 1/2/4s、对 429/5xx 自动重试），降低 CI 网络抖动导致的误报失败；业务 200 响应不受影响。
+- **2026-09**: 新增飞书通知：配置 `FEISHU_WEBHOOK`（开启签名校验时再配置 `FEISHU_SECRET`）即可通过飞书自定义机器人接收签到结果，支持与 PushDeer 同时推送。
 
 
 ## 问题排查与定位

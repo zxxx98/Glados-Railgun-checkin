@@ -1,3 +1,8 @@
+import base64
+import hashlib
+import hmac
+import time
+
 import requests
 import json
 import os
@@ -97,6 +102,8 @@ class Config:
     """应用配置"""
 
     ENV_PUSH_KEY = "PUSHDEER_SENDKEY"
+    ENV_FEISHU_WEBHOOK = "FEISHU_WEBHOOK"
+    ENV_FEISHU_SECRET = "FEISHU_SECRET"
     ENV_COOKIES = "GLADOS_COOKIES"
     ENV_EXCHANGE_PLAN = "GLADOS_EXCHANGE_PLAN"
     ENV_VERBOSE = "GLADOS_VERBOSE"
@@ -119,6 +126,8 @@ class Config:
 
     def __init__(self):
         self.push_key: str = ""
+        self.feishu_webhook: str = ""
+        self.feishu_secret: str = ""
         self.cookies_list: List[str] = []
         self.exchange_plan: str = self.DEFAULT_EXCHANGE_PLAN
         self.verbose: bool = self.DEFAULT_VERBOSE
@@ -127,6 +136,8 @@ class Config:
     def _load_config(self) -> None:
         """加载配置"""
         push_key_env: Optional[str] = os.environ.get(self.ENV_PUSH_KEY)
+        feishu_webhook_env: Optional[str] = os.environ.get(self.ENV_FEISHU_WEBHOOK)
+        feishu_secret_env: Optional[str] = os.environ.get(self.ENV_FEISHU_SECRET)
         raw_cookies_env: Optional[str] = os.environ.get(self.ENV_COOKIES)
         exchange_plan_env: Optional[str] = os.environ.get(self.ENV_EXCHANGE_PLAN)
         verbose_env: Optional[str] = os.environ.get(self.ENV_VERBOSE)
@@ -136,6 +147,18 @@ class Config:
             self.push_key = ""
         else:
             self.push_key = push_key_env
+
+        if not feishu_webhook_env:
+            logger.warning(f"{LogEmoji.WARNING} 环境变量 '{self.ENV_FEISHU_WEBHOOK}' 未设置。")
+            self.feishu_webhook = ""
+        else:
+            self.feishu_webhook = feishu_webhook_env.strip()
+
+        if not feishu_secret_env:
+            logger.warning(f"{LogEmoji.WARNING} 环境变量 '{self.ENV_FEISHU_SECRET}' 未设置。")
+            self.feishu_secret = ""
+        else:
+            self.feishu_secret = feishu_secret_env.strip()
 
         if not raw_cookies_env:
             logger.warning(f"{LogEmoji.WARNING} 环境变量 '{self.ENV_COOKIES}' 未设置。")
@@ -158,6 +181,7 @@ class Config:
 
         logger.info(f"{LogEmoji.INFO} 共加载了 {len(self.cookies_list)} 个 Cookie 用于签到。")
         logger.info(f"{LogEmoji.INFO} 当前 {self.ENV_PUSH_KEY} {'已设置' if push_key_env else '未设置'}。")
+        logger.info(f"{LogEmoji.INFO} 当前 {self.ENV_FEISHU_WEBHOOK} {'已设置' if feishu_webhook_env else '未设置'}。")
         logger.info(f"{LogEmoji.INFO} 当前 {self.ENV_EXCHANGE_PLAN}: {self.exchange_plan}。")
 
         if verbose_env is not None:
@@ -451,25 +475,104 @@ class CheckinResult:
 
 
 class PushService:
-    """推送服务"""
+    """推送服务，支持 PushDeer 与飞书自定义机器人"""
 
     def __init__(self, config: Config):
         self.config = config
 
-    def send(self, title: str, content: str) -> bool:
-        """发送推送"""
-        if not self.config.push_key:
-            logger.info(f"{LogEmoji.WARNING} 未设置推送密钥，跳过推送通知。")
-            return False
-
+    def _send_pushdeer(self, title: str, content: str) -> bool:
+        """PushDeer 推送"""
         try:
             pushdeer = PushDeer(pushkey=self.config.push_key)
             pushdeer.send_text(title, desp=content)
-            logger.info(f"{LogEmoji.SUCCESS} 推送通知发送成功。")
+            logger.info(f"{LogEmoji.SUCCESS} PushDeer 通知发送成功。")
             return True
         except Exception as e:
-            logger.error(f"{LogEmoji.ERROR} 发送推送通知失败: {e}")
+            logger.error(f"{LogEmoji.ERROR} 发送 PushDeer 通知失败: {e}")
             return False
+
+    def _build_feishu_payload(self, title: str, content: str) -> Dict:
+        """构造飞书自定义机器人消息体"""
+        lines = [f"**{title}**", ""]
+        lines.extend(line for line in (content or "").splitlines() if line.strip())
+
+        if self.config.feishu_secret:
+            timestamp = str(int(time.time()))
+            sign_string = f"{timestamp}\n{self.config.feishu_secret}"
+            signature = base64.b64encode(hmac.new(sign_string.encode("utf-8"), b"", digestmod=hashlib.sha256).digest()).decode("utf-8")
+            return {
+                "timestamp": timestamp,
+                "sign": signature,
+                "msg_type": "interactive",
+                "card": {
+                    "config": {"wide_screen_mode": True},
+                    "header": {
+                        "template": "blue",
+                        "title": {"tag": "plain_text", "content": title},
+                    },
+                    "elements": [{"tag": "markdown", "content": "\n".join(lines)}],
+                },
+            }
+
+        return {
+            "msg_type": "interactive",
+            "card": {
+                "config": {"wide_screen_mode": True},
+                "header": {
+                    "template": "blue",
+                    "title": {"tag": "plain_text", "content": title},
+                },
+                "elements": [{"tag": "markdown", "content": "\n".join(lines)}],
+            },
+        }
+
+    def _send_feishu(self, title: str, content: str) -> bool:
+        """飞书自定义机器人推送"""
+        payload = self._build_feishu_payload(title, content)
+        try:
+            response = requests.post(
+                self.config.feishu_webhook,
+                json=payload,
+                timeout=(10, 30),
+            )
+        except requests.exceptions.RequestException as e:
+            logger.error(f"{LogEmoji.ERROR} 发送飞书通知时发生网络错误: {e}")
+            return False
+
+        if not response.ok:
+            logger.error(f"{LogEmoji.ERROR} 飞书通知发送失败，状态码 {response.status_code}: {response.text}")
+            return False
+
+        try:
+            data = response.json()
+        except ValueError:
+            logger.error(f"{LogEmoji.ERROR} 飞书响应解析失败: {response.text}")
+            return False
+
+        if data.get("code", 0) != 0:
+            logger.error(f"{LogEmoji.ERROR} 飞书通知发送失败: code={data.get('code')}, msg={data.get('msg')}")
+            return False
+
+        logger.info(f"{LogEmoji.SUCCESS} 飞书通知发送成功。")
+        return True
+
+    def send(self, title: str, content: str) -> bool:
+        """发送推送（可同时启用多个渠道）"""
+        if not isinstance(self.config, Config):
+            logger.info(f"{LogEmoji.WARNING} 未加载配置，跳过推送通知。")
+            return False
+
+        if not self.config.push_key and not self.config.feishu_webhook:
+            logger.info(f"{LogEmoji.WARNING} 未设置任何推送密钥，跳过推送通知。")
+            return False
+
+        sent = False
+        if self.config.push_key:
+            sent = self._send_pushdeer(title, content) or sent
+        if self.config.feishu_webhook:
+            sent = self._send_feishu(title, content) or sent
+
+        return sent
 
 
 class Checker:
