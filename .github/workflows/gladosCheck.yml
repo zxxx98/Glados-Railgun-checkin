@@ -41,8 +41,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install requests
-        pip install pypushdeer
+        pip install -r requirements.txt
 
     # 执行 签到脚本
     - name: Running checkin
@@ -50,6 +49,7 @@ jobs:
         python checkin.py
       env:
         PUSHDEER_SENDKEY: ${{ secrets.PUSHDEER_SENDKEY }}
+        SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
         FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
         FEISHU_SECRET: ${{ secrets.FEISHU_SECRET }}
         GLADOS_COOKIES: ${{ secrets.GLADOS_COOKIES }}
